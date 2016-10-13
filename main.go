@@ -160,8 +160,8 @@ func payloadHandler(w http.ResponseWriter, r *http.Request) {
 
 	err := json.NewDecoder(io.LimitReader(r.Body, MaxLength)).Decode(&content)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(fmt.Sprintf("%v", err)))
 		return
 	}
 
@@ -175,7 +175,7 @@ func payloadHandler(w http.ResponseWriter, r *http.Request) {
 		JobQueue <- work
 	}
 
-	//w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -203,7 +203,7 @@ func main() {
 
 	http.HandleFunc("/", payloadHandler)
 	err := http.ListenAndServe(":8080", nil)
-	log.Println("listening on localhost:8080")
-	fmt.Println(err)
-
+	if err != nil {
+		fmt.Println(err)
+	}
 }
