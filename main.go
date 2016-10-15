@@ -10,19 +10,20 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"time"
 )
 
 const (
-	DEFAULT_MAX_WORKERS       int   = 500
-	DEFAULT_MAX_JOBS_IN_QUEUE int   = 500
-	DEFAULT_MAX_LENGTH        int64 = 1048576
+	DefaultMaxWorkers                int    = 500
+	DefaultMaxJobsInQueue            int    = 500
+	DefaultMaxLength                 int64  = 1048576
+	DefaultBusinessGoInputValidation string = "http://127.0.0.1:1234"
 )
 
 var (
-	MaxWorker int
-	MaxQueue  int
-	MaxLength int64
+	MaxWorker                 int
+	MaxQueue                  int
+	MaxLength                 int64
+	BusinessGoInputValidation string
 )
 
 type PayloadCollection struct {
@@ -37,12 +38,6 @@ type Payload struct {
 // Job represents the job to be run
 type Job struct {
 	Payload Payload
-}
-
-func (p *Payload) UploadToS3() error {
-	fmt.Println("Heavy work now")
-	time.Sleep(time.Second)
-	return nil
 }
 
 // A buffered channel that we can send work requests on.
@@ -74,9 +69,6 @@ func (w Worker) Start() {
 			select {
 			case job := <-w.JobChannel:
 				// we have received a work request.
-				//if err := job.Payload.UploadToS3(); err != nil {
-				//	log.Printf("Error uploading to S3: %s", err.Error())
-				//}
 				b := new(bytes.Buffer)
 				err := json.NewEncoder(b).Encode(job.Payload)
 				if err != nil {
@@ -85,7 +77,7 @@ func (w Worker) Start() {
 					ResponseQueue <- []byte("err")
 					return
 				}
-				resp, err := http.Post("http://127.0.0.1:1234", "application/json", b)
+				resp, err := http.Post(BusinessGoInputValidation, "application/json", b)
 				if err != nil {
 					//w.WriteHeader(http.StatusBadRequest)
 					//w.Write([]byte(fmt.Sprintf("%v", err)))
@@ -190,15 +182,20 @@ func payloadHandler(w http.ResponseWriter, r *http.Request) {
 func initialize() {
 	var err error
 	if MaxWorker, err = strconv.Atoi(os.Getenv("MAX_WORKERS")); err != nil {
-		MaxWorker = DEFAULT_MAX_WORKERS
+		MaxWorker = DefaultMaxWorkers
 	}
 
 	if MaxQueue, err = strconv.Atoi(os.Getenv("MAX_QUEUES")); err != nil {
-		MaxQueue = DEFAULT_MAX_JOBS_IN_QUEUE
+		MaxQueue = DefaultMaxJobsInQueue
 	}
 
 	if MaxLength, err = strconv.ParseInt(os.Getenv("MAX_LENGTH"), 10, 64); err != nil {
-		MaxLength = DEFAULT_MAX_LENGTH
+		MaxLength = DefaultMaxLength
+	}
+
+	BusinessGoInputValidation = os.Getenv("BUSINESS_GO_INPUT_VALIDATION_URL")
+	if BusinessGoInputValidation == "" {
+		BusinessGoInputValidation = DefaultBusinessGoInputValidation
 	}
 
 	JobQueue = make(chan Job, MaxQueue)
