@@ -1,9 +1,3 @@
-/*
-Inspired by
-    http://marcio.io/2015/07/handling-1-million-requests-per-minute-with-golang/
-
-*/
-
 package main
 
 import (
@@ -11,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 )
 
 const (
@@ -38,42 +34,26 @@ type Payload struct {
 	Email string `json:"email"`
 }
 
+// Job represents the job to be run
 type Job struct {
 	Payload Payload
 }
 
-type Dispatcher struct {
-	WorkerPool chan chan Job
+func (p *Payload) UploadToS3() error {
+	fmt.Println("Heavy work now")
+	time.Sleep(time.Second)
+	return nil
 }
 
+// A buffered channel that we can send work requests on.
 var JobQueue chan Job
+var ResponseQueue chan []byte
 
+// Worker represents the worker that executes the job
 type Worker struct {
 	WorkerPool chan chan Job
 	JobChannel chan Job
 	quit       chan bool
-}
-
-func (p *Payload) EmailCheck() error {
-	b := new(bytes.Buffer)
-	err := json.NewEncoder(b).Encode(p)
-	if err != nil {
-		return err
-	}
-	r, err := http.Post("http://127.0.0.1:1234", "application/json", b)
-	if err != nil {
-		return err
-	}
-	fmt.Println(r.StatusCode)
-
-	defer r.Body.Close()
-
-	//client := &http.Client{}
-	//r, _ := http.NewRequest("POST", "http://127.0.0.1:1234", p)
-	//w, _ := client.Do(r)
-	//fmt.Println(w.Status)
-	//fmt.Println(w.Header)
-	return nil
 }
 
 func NewWorker(workerPool chan chan Job) Worker {
@@ -83,6 +63,8 @@ func NewWorker(workerPool chan chan Job) Worker {
 		quit:       make(chan bool)}
 }
 
+// Start method starts the run loop for the worker, listening for a quit channel in
+// case we need to stop it
 func (w Worker) Start() {
 	go func() {
 		for {
@@ -91,20 +73,48 @@ func (w Worker) Start() {
 
 			select {
 			case job := <-w.JobChannel:
-				if err := job.Payload.EmailCheck(); err != nil {
-					log.Printf("Error Post to Backend: %s", err.Error())
+				// we have received a work request.
+				//if err := job.Payload.UploadToS3(); err != nil {
+				//	log.Printf("Error uploading to S3: %s", err.Error())
+				//}
+				b := new(bytes.Buffer)
+				err := json.NewEncoder(b).Encode(job.Payload)
+				if err != nil {
+					//w.WriteHeader(http.StatusBadRequest)
+					//w.Write([]byte(fmt.Sprintf("%v", err)))
+					ResponseQueue <- []byte("err")
+					return
 				}
+				resp, err := http.Post("http://127.0.0.1:1234", "application/json", b)
+				if err != nil {
+					//w.WriteHeader(http.StatusBadRequest)
+					//w.Write([]byte(fmt.Sprintf("%v", err)))
+					ResponseQueue <- []byte("err")
+					return
+				}
+				body, _ := ioutil.ReadAll(resp.Body)
+
+				defer resp.Body.Close()
+				ResponseQueue <- body
+
 			case <-w.quit:
+				// we have received a signal to stop
 				return
 			}
 		}
 	}()
 }
 
+// Stop signals the worker to stop listening for work requests.
 func (w Worker) Stop() {
 	go func() {
 		w.quit <- true
 	}()
+}
+
+type Dispatcher struct {
+	// A pool of workers channels that are registered with the dispatcher
+	WorkerPool chan chan Job
 }
 
 func NewDispatcher(maxWorkers int) *Dispatcher {
@@ -113,6 +123,7 @@ func NewDispatcher(maxWorkers int) *Dispatcher {
 }
 
 func (d *Dispatcher) Run() {
+	// starting n number of workers
 	for i := 0; i < MaxWorker; i++ {
 		worker := NewWorker(d.WorkerPool)
 		worker.Start()
@@ -124,11 +135,13 @@ func (d *Dispatcher) dispatch() {
 	for {
 		select {
 		case job := <-JobQueue:
+			// a job request has been received
 			go func(job Job) {
 				// try to obtain a worker job channel that is available.
 				// this will block until a worker is idle
 				jobChannel := <-d.WorkerPool
 
+				// dispatch the job to the worker job channel
 				jobChannel <- job
 			}(job)
 		}
@@ -140,22 +153,38 @@ func payloadHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+
+	// Read the body into a string for json decoding
 	var content = &PayloadCollection{}
 
 	err := json.NewDecoder(io.LimitReader(r.Body, MaxLength)).Decode(&content)
 	if err != nil {
+		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(fmt.Sprintf("%v", err)))
 		return
 	}
 
+	// Go through each payload and queue items individually to be posted to S3
 	for _, payload := range content.Payloads {
-		work := Job{Payload: payload}
-		JobQueue <- work
+
+		// let's create a job with the payload
+		job := Job{Payload: payload}
+
+		// Push the work onto the queue.
+		JobQueue <- job
+
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusOK)
+	for {
+		select {
+		case response := <-ResponseQueue:
+			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(response))
+			return
+		}
+	}
+
 }
 
 func initialize() {
@@ -173,6 +202,8 @@ func initialize() {
 	}
 
 	JobQueue = make(chan Job, MaxQueue)
+	ResponseQueue = make(chan []byte, MaxQueue)
+
 }
 
 func main() {
@@ -182,7 +213,7 @@ func main() {
 
 	http.HandleFunc("/", payloadHandler)
 	err := http.ListenAndServe(":8080", nil)
-	if err != nil {
-		fmt.Println(err)
-	}
+	log.Println("listening on localhost:8080")
+	fmt.Println(err)
+
 }
