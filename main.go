@@ -142,7 +142,8 @@ func (d *Dispatcher) dispatch() {
 
 func payloadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("HEALTHY"))
 		return
 	}
 
