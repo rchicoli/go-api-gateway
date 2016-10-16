@@ -9,8 +9,9 @@ all: build
 
 build:
 	docker run --rm -ti -v $(PWD):$(WORKDIR) -w $(WORKDIR) golang:1.7.1-alpine go build -v
-	mv $(BINARY) docker/
+	mv -f $(BINARY) docker/
 	docker build --rm -t $(NAME):$(VERSION) docker/
+	rm -f docker/$(BINARY)
 
 tag:
 	docker tag $(NAME):$(VERSION) $(NAME):latest
