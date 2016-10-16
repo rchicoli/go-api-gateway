@@ -1,4 +1,4 @@
-NAME = rchicoli/docker-go-api-gateway
+NAME = rchicoli/go-api-gateway
 VERSION = 0.0.7-dev
 WORKDIR = /go/src/go-api-gateway
 BINARY = go-api-gateway

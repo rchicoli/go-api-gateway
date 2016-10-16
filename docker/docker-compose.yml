@@ -1,0 +1,50 @@
+version: '2'
+services:
+  go-api-gateway:
+    image: rchicoli/go-api-gateway:0.0.7-dev
+    network_mode: "bridge"
+    restart: "unless-stopped"
+    # logging:
+    #   driver: gelf
+    #   options:
+    #     gelf-address: "udp://logstash.service.consul:12201"
+    #     tag: "docker"
+    depends_on:
+      - go-input-validation
+      #- nginx
+    labels:
+      - 'de.regis24.app.name=go-api-gateway'
+    links:
+      - go-input-validation
+    environment:
+      # - 'BUSINESS_GO_INPUT_VALIDATION_URL=http://nginx-80.service.consul:80/go-input-validation/'
+      - 'BUSINESS_GO_INPUT_VALIDATION_URL=http://go-input-validation:8080/'
+      - 'MAX_WORKERS=500'
+      - 'MAX_QUEUES=500'
+      - 'MAX_LENGTH=1048576'
+      - 'affinity:de.regis24.app.name!=go-api-gateway'
+      - 'reschedule:on-node-failure'
+      - 'SERVICE_8080_CHECK_HTTP=/'
+      - 'SERVICE_8080_CHECK_INTERVAL=10s'
+      - 'SERVICE_8080_CHECK_TIMEOUT=9s'
+      - 'SERVICE_TAGS=service,green'
+  go-input-validation:
+    image: rchicoli/go-input-validation:0.0.4-dev
+    network_mode: "bridge"
+    restart: "unless-stopped"
+    # logging:
+    #   driver: gelf
+    #   options:
+    #     gelf-address: "udp://logstash.service.consul:12201"
+    #     tag: "docker"
+    #depends_on:
+      #- nginx
+    labels:
+      - 'de.regis24.app.name=go-input-validation'
+    environment:
+      - 'affinity:de.regis24.app.name!=go-input-validation'
+      - 'reschedule:on-node-failure'
+      - 'SERVICE_8080_CHECK_HTTP=/'
+      - 'SERVICE_8080_CHECK_INTERVAL=10s'
+      - 'SERVICE_8080_CHECK_TIMEOUT=9s'
+      - 'SERVICE_TAGS=service,green'
