@@ -74,14 +74,14 @@ func (w Worker) Start() {
 				if err != nil {
 					//w.WriteHeader(http.StatusBadRequest)
 					//w.Write([]byte(fmt.Sprintf("%v", err)))
-					ResponseQueue <- []byte("err")
+					ResponseQueue <- []byte(err.Error())
 					return
 				}
 				resp, err := http.Post(BusinessGoInputValidation, "application/json", b)
 				if err != nil {
 					//w.WriteHeader(http.StatusBadRequest)
 					//w.Write([]byte(fmt.Sprintf("%v", err)))
-					ResponseQueue <- []byte("err")
+					ResponseQueue <- []byte(err.Error())
 					return
 				}
 				body, _ := ioutil.ReadAll(resp.Body)
@@ -156,10 +156,20 @@ func payloadHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	if content.Payloads == nil {
+		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+		http.Error(w, "ERROR: Payload error", http.StatusBadRequest)
+		return
+	}
 
 	// Go through each payload and queue items individually to be posted to S3
 	for _, payload := range content.Payloads {
 
+		if payload.Email == "" {
+			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+			http.Error(w, "ERROR: Email field is missing", http.StatusBadRequest)
+			return
+		}
 		// let's create a job with the payload
 		job := Job{Payload: payload}
 
@@ -210,8 +220,8 @@ func main() {
 	dispatcher.Run()
 
 	http.HandleFunc("/", payloadHandler)
-	err := http.ListenAndServe(":8080", nil)
 	log.Println("listening on localhost:8080")
+	err := http.ListenAndServe(":8080", nil)
 	fmt.Println(err)
 
 }
