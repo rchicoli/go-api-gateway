@@ -27,8 +27,8 @@ var (
 )
 
 type PayloadCollection struct {
-	Token    string    `json:"token"`
-	Payloads []Payload `json:"person"`
+	Token    string  `json:"token"`
+	Payloads Payload `json:"person"`
 }
 
 type Payload struct {
@@ -148,40 +148,24 @@ func payloadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Read the body into a string for json decoding
-	var content = &PayloadCollection{}
+	content := &PayloadCollection{}
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 
-	err := json.NewDecoder(io.LimitReader(r.Body, MaxLength)).Decode(&content)
+	err := json.NewDecoder(io.LimitReader(r.Body, MaxLength)).Decode(content)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	if content.Payloads == nil {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		http.Error(w, "ERROR: Payload error", http.StatusBadRequest)
+		http.Error(w, "ERROR: NewDecoder error", http.StatusBadRequest)
 		return
 	}
 
-	// Go through each payload and queue items individually to be posted to S3
-	for _, payload := range content.Payloads {
+	// let's create a job with the payload
+	job := Job{Payload: content.Payloads}
 
-		if payload.Email == "" {
-			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-			http.Error(w, "ERROR: Email field is missing", http.StatusBadRequest)
-			return
-		}
-		// let's create a job with the payload
-		job := Job{Payload: payload}
-
-		// Push the work onto the queue.
-		JobQueue <- job
-
-	}
+	// Push the work onto the queue.
+	JobQueue <- job
 
 	for {
 		select {
 		case response := <-ResponseQueue:
-			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(response))
 			return
