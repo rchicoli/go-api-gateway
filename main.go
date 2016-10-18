@@ -141,11 +141,6 @@ func (d *Dispatcher) dispatch() {
 }
 
 func payloadHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("HEALTHY"))
-		return
-	}
 
 	// Read the body into a string for json decoding
 	content := &PayloadCollection{}
@@ -205,6 +200,11 @@ func main() {
 
 	http.HandleFunc("/", payloadHandler)
 	log.Println("listening on localhost:8080")
+
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "HEALTHY")
+	})
+
 	err := http.ListenAndServe(":8080", nil)
 	fmt.Println(err)
 
