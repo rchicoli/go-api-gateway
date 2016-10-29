@@ -90,15 +90,11 @@ func (w Worker) Start() {
 					return
 				}
 
-				fmt.Printf("Now1 %v\n", *Cache.Now)
 				if *Cache.Now > *Cache.TTL {
-					fmt.Println("cache has been expired")
+					// TTL has been expired, send another DNS request
 					Cache = setDNS()
-
 				} else {
 					*Cache.Now = uint32(time.Now().Unix())
-					fmt.Printf("Now2 %v\n", *Cache.Now)
-					fmt.Printf("TTL %v\n", *Cache.TTL)
 				}
 
 				resp, err := http.Post(fmt.Sprintf("http://%v:%v", *Cache.Hostname, "1234"), "application/json", b)
