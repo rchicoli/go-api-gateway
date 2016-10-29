@@ -110,9 +110,12 @@ func (w Worker) Start() {
 				//fmt.Printf("%q", string(rr))
 				//log.Printf("%v %v", resp.Status, resp.Request.Host)
 
-				body, _ := ioutil.ReadAll(resp.Body)
-
-				log.Printf("%v", resp.StatusCode)
+				body, err := ioutil.ReadAll(resp.Body)
+				if err != nil {
+					log.Println(err)
+					ErrorEncode <- err
+					return
+				}
 
 				defer resp.Body.Close()
 				ResponseQueue <- []byte(body)
