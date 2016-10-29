@@ -7,16 +7,21 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
+	"time"
+
+	"github.com/miekg/dns"
 )
 
 const (
 	DefaultMaxWorkers                int    = 500
 	DefaultMaxJobsInQueue            int    = 500
 	DefaultMaxLength                 int64  = 1048576
-	DefaultBusinessGoInputValidation string = "http://127.0.0.1:1234"
+	DefaultBusinessGoInputValidation string = "blackzone.fritz.box"
 )
 
 var (
@@ -43,6 +48,14 @@ type Job struct {
 // A buffered channel that we can send work requests on.
 var JobQueue chan Job
 var ResponseQueue chan []byte
+var ResponseError chan int
+var ErrorEncode chan error
+
+type TTLCache struct {
+	Hostname *string
+	TTL      *uint32
+	Now      *uint32
+}
 
 // Worker represents the worker that executes the job
 type Worker struct {
@@ -72,22 +85,41 @@ func (w Worker) Start() {
 				b := new(bytes.Buffer)
 				err := json.NewEncoder(b).Encode(job.Payload)
 				if err != nil {
-					//w.WriteHeader(http.StatusBadRequest)
-					//w.Write([]byte(fmt.Sprintf("%v", err)))
-					ResponseQueue <- []byte(err.Error())
+					log.Println(err)
+					ErrorEncode <- err
 					return
 				}
-				resp, err := http.Post(BusinessGoInputValidation, "application/json", b)
+
+				fmt.Printf("Now1 %v\n", *Cache.Now)
+				if *Cache.Now > *Cache.TTL {
+					fmt.Println("cache has been expired")
+					Cache = setDNS()
+
+				} else {
+					*Cache.Now = uint32(time.Now().Unix())
+					fmt.Printf("Now2 %v\n", *Cache.Now)
+					fmt.Printf("TTL %v\n", *Cache.TTL)
+				}
+
+				resp, err := http.Post(fmt.Sprintf("http://%v:%v", *Cache.Hostname, "1234"), "application/json", b)
+				//request, err := http.NewRequest("POST", BusinessGoInputValidation, b)
 				if err != nil {
-					//w.WriteHeader(http.StatusBadRequest)
-					//w.Write([]byte(fmt.Sprintf("%v", err)))
-					ResponseQueue <- []byte(err.Error())
+					log.Println(err)
+					ResponseError <- resp.StatusCode
 					return
 				}
+
+				//resp, _ := (&http.Client{}).Do(request)
+				//rr, _ := httputil.DumpResponse(resp, true)
+				//fmt.Printf("%q", string(rr))
+				//log.Printf("%v %v", resp.Status, resp.Request.Host)
+
 				body, _ := ioutil.ReadAll(resp.Body)
 
+				log.Printf("%v", resp.StatusCode)
+
 				defer resp.Body.Close()
-				ResponseQueue <- body
+				ResponseQueue <- []byte(body)
 
 			case <-w.quit:
 				// we have received a signal to stop
@@ -164,7 +196,48 @@ func payloadHandler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(response))
 			return
+		case responseError := <-ResponseError:
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(strconv.Itoa(responseError)))
+			return
+		case errorEncode := <-ErrorEncode:
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errorEncode.Error()))
+			return
 		}
+	}
+
+}
+
+var Cache *TTLCache
+
+func setDNS() *TTLCache {
+	config, _ := dns.ClientConfigFromFile("/etc/resolv.conf")
+	c := new(dns.Client)
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(DefaultBusinessGoInputValidation), dns.TypeA)
+	m.RecursionDesired = true
+	r, _, err := c.Exchange(m, net.JoinHostPort(config.Servers[0], config.Port))
+	if r == nil {
+		log.Fatalf("*** error: %s\n", err.Error())
+	}
+	if r.Rcode != dns.RcodeSuccess {
+		log.Fatalf(" *** invalid answer name %s after MX query for %s\n", DefaultBusinessGoInputValidation, DefaultBusinessGoInputValidation)
+	}
+
+	now := uint32(time.Now().Unix())
+
+	var hostname string
+	var ttl uint32
+	for _, a := range r.Answer {
+		hostname = a.Header().Name
+		ttl = now + uint32(a.Header().Ttl)
+	}
+
+	return &TTLCache{
+		Now:      &now,
+		Hostname: &hostname,
+		TTL:      &ttl,
 	}
 
 }
@@ -194,6 +267,13 @@ func initialize() {
 }
 
 func main() {
+	runtime.GOMAXPROCS(4)
+
+	Cache = setDNS()
+	fmt.Println(*Cache.TTL)
+	fmt.Println(*Cache.Hostname)
+	fmt.Println(*Cache.Now)
+
 	initialize()
 	dispatcher := NewDispatcher(MaxWorker)
 	dispatcher.Run()
