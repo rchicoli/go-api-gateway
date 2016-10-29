@@ -179,7 +179,7 @@ func payloadHandler(w http.ResponseWriter, r *http.Request) {
 
 	err := json.NewDecoder(io.LimitReader(r.Body, MaxLength)).Decode(content)
 	if err != nil {
-		http.Error(w, "ERROR: NewDecoder error", http.StatusBadRequest)
+		http.Error(w, "*** invalid payload", http.StatusBadRequest)
 		return
 	}
 
@@ -218,10 +218,10 @@ func setDNS() *TTLCache {
 	m.RecursionDesired = true
 	r, _, err := c.Exchange(m, net.JoinHostPort(config.Servers[0], config.Port))
 	if r == nil {
-		log.Fatalf("*** error: %s\n", err.Error())
+		log.Fatalf("*** %s\n", err.Error())
 	}
 	if r.Rcode != dns.RcodeSuccess {
-		log.Fatalf(" *** invalid answer name %s after MX query for %s\n", DefaultBusinessGoInputValidation, DefaultBusinessGoInputValidation)
+		log.Fatalf("*** invalid answer name %s after MX query for %s\n", DefaultBusinessGoInputValidation, DefaultBusinessGoInputValidation)
 	}
 
 	now := uint32(time.Now().Unix())
