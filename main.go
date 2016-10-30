@@ -9,7 +9,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"regexp"
 	"runtime"
 	"strconv"
 	"time"
@@ -18,13 +20,19 @@ import (
 )
 
 const (
+	DefaultMaxIdleConnsPerHost       int    = 2
+	DefaultIdleConnTimeout           int    = 10
+	DefaultDisableKeepAlives         bool   = false
 	DefaultMaxWorkers                int    = 500
 	DefaultMaxJobsInQueue            int    = 500
 	DefaultMaxLength                 int64  = 1048576
-	DefaultBusinessGoInputValidation string = "blackzone.fritz.box"
+	DefaultBusinessGoInputValidation string = "http://blackzone.fritz.box:1234"
 )
 
 var (
+	MaxIdleConnsPerHost       int
+	IdleConnTimeout           int
+	DisableKeepAlives         bool
 	MaxWorker                 int
 	MaxQueue                  int
 	MaxLength                 int64
@@ -90,14 +98,7 @@ func (w Worker) Start() {
 					return
 				}
 
-				if *Cache.Now > *Cache.TTL {
-					// TTL has been expired, send another DNS request
-					Cache = setDNS()
-				} else {
-					*Cache.Now = uint32(time.Now().Unix())
-				}
-
-				resp, err := http.Post(fmt.Sprintf("http://%v:%v", *Cache.Hostname, "1234"), "application/json", b)
+				resp, err := http.Post(fmt.Sprintf("http://%s:%s", *Cache.Hostname, "1234"), "application/json", b)
 				//request, err := http.NewRequest("POST", BusinessGoInputValidation, b)
 				if err != nil {
 					log.Println(err)
@@ -108,7 +109,6 @@ func (w Worker) Start() {
 				//resp, _ := (&http.Client{}).Do(request)
 				//rr, _ := httputil.DumpResponse(resp, true)
 				//fmt.Printf("%q", string(rr))
-				//log.Printf("%v %v", resp.Status, resp.Request.Host)
 
 				body, err := ioutil.ReadAll(resp.Body)
 				if err != nil {
@@ -173,7 +173,6 @@ func (d *Dispatcher) dispatch() {
 
 func payloadHandler(w http.ResponseWriter, r *http.Request) {
 
-	// Read the body into a string for json decoding
 	content := &PayloadCollection{}
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 
@@ -214,22 +213,34 @@ func setDNS() *TTLCache {
 	config, _ := dns.ClientConfigFromFile("/etc/resolv.conf")
 	c := new(dns.Client)
 	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(DefaultBusinessGoInputValidation), dns.TypeA)
+
+	u, _ := url.Parse(BusinessGoInputValidation)
+	host, _, _ := net.SplitHostPort(u.Host)
+
+	m.SetQuestion(dns.Fqdn(host), dns.TypeA)
 	m.RecursionDesired = true
 	r, _, err := c.Exchange(m, net.JoinHostPort(config.Servers[0], config.Port))
 	if r == nil {
 		log.Fatalf("*** %s\n", err.Error())
 	}
 	if r.Rcode != dns.RcodeSuccess {
-		log.Fatalf("*** invalid answer name %s after MX query for %s\n", DefaultBusinessGoInputValidation, DefaultBusinessGoInputValidation)
+		log.Fatalf("*** invalid answer name for %s\n", host)
 	}
 
 	now := uint32(time.Now().Unix())
 
+	ip, _ := net.LookupIP(host)
+	fmt.Println(ip)
+
 	var hostname string
 	var ttl uint32
+
+	// net.LookupIP(host string) (ips []IP, err error)
+	s := regexp.MustCompile("(?:[0-9]{1,3}.){3}[0-9]{1,3}")
+	ipaddress := s.FindString(fmt.Sprintf("%v", r.Answer))
+
 	for _, a := range r.Answer {
-		hostname = a.Header().Name
+		hostname = ipaddress
 		ttl = now + uint32(a.Header().Ttl)
 	}
 
@@ -238,7 +249,18 @@ func setDNS() *TTLCache {
 		Hostname: &hostname,
 		TTL:      &ttl,
 	}
+}
 
+func checkDNS() {
+	for {
+		if *Cache.Now > *Cache.TTL {
+			// TTL has been expired, send another DNS request
+			Cache = setDNS()
+		} else {
+			*Cache.Now = uint32(time.Now().Unix())
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 func initialize() {
@@ -260,6 +282,16 @@ func initialize() {
 		BusinessGoInputValidation = DefaultBusinessGoInputValidation
 	}
 
+	if MaxIdleConnsPerHost, err = strconv.Atoi(os.Getenv("MaxIdleConnsPerHost")); err != nil {
+		MaxIdleConnsPerHost = DefaultMaxIdleConnsPerHost
+	}
+	if IdleConnTimeout, err = strconv.Atoi(os.Getenv("IdleConnTimeout")); err != nil {
+		IdleConnTimeout = DefaultIdleConnTimeout
+	}
+	if DisableKeepAlives, err = strconv.ParseBool(os.Getenv("DisableKeepAlives")); err != nil {
+		DisableKeepAlives = DefaultDisableKeepAlives
+	}
+
 	JobQueue = make(chan Job, MaxQueue)
 	ResponseQueue = make(chan []byte, MaxQueue)
 
@@ -268,12 +300,10 @@ func initialize() {
 func main() {
 	runtime.GOMAXPROCS(4)
 
-	Cache = setDNS()
-	fmt.Println(*Cache.TTL)
-	fmt.Println(*Cache.Hostname)
-	fmt.Println(*Cache.Now)
-
 	initialize()
+	Cache = setDNS()
+	go checkDNS()
+
 	dispatcher := NewDispatcher(MaxWorker)
 	dispatcher.Run()
 
